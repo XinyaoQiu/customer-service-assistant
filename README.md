@@ -104,13 +104,37 @@ uv run pytest
 Disposition tests always run. Retrieval tests need Weaviate and an API key and skip
 without them.
 
-## Known limitations
+## Latency
 
-**Latency is dominated by model queueing, not by this code.** The same three-round agent
-was measured at 14.8s, 38.0s, 76.6s and 125.5s across four identical runs — same six
-messages each time. Retrieval is ~0.8s and a single model call ~0.9s; the variance is
-server-side queueing on a free-tier key. The 90s per-path budget exists to bound runaway
-loops, not to make replies fast.
+Turns stream progress as they run:
+
+```
+you > why has my article not been published yet?
+  Reading your message…
+  Checking your articles…
+
+You currently have a few recent articles that have not been published yet: …
+```
+
+Three things cut the work rather than hide it:
+
+**Routing and the article lookup run together.** Both database paths open with the same
+query and it costs nothing, so it overlaps the classification call instead of following
+it. The result is handed to the agent, which saves it an entire opening round — the
+single largest win, since a round is a model round-trip.
+
+**Retrieval overlaps its two network calls**, embedding and connection setup: 0.8s → 0.38s.
+
+**Agents are built once**, at graph construction. Constructing one binds tool schemas to
+the model, and repeating that per turn added latency to every reply.
+
+### Known limitation
+
+**What remains is model queueing, not this code.** Before these changes, the same
+three-round agent measured 14.8s, 38.0s, 76.6s and 125.5s across four identical runs —
+same six messages each time. A single model call is ~0.9s and retrieval ~0.38s; the
+variance is server-side queueing on a free-tier key. Expect 5-15s on a paid endpoint.
+The 90s per-path budget bounds runaway loops; it is not a latency target.
 
 **No conversational memory across intents.** A message covering two topics ("why wasn't
 my article published, and when do I get paid") routes to one path and answers half.

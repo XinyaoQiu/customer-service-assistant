@@ -81,11 +81,13 @@ def chat(
             continue
 
         try:
-            turn = conversation.send(message)
+            for kind, text in conversation.stream(message):
+                if kind == "progress":
+                    typer.secho(f"  {text}", fg=typer.colors.BRIGHT_BLACK)
+                else:
+                    typer.echo(f"\n{text or '(no reply)'}\n")
         except Exception as exc:
             typer.secho(f"failed: {exc}", fg=typer.colors.RED)
-            continue
-        _render(turn)
 
 
 def _render(turn) -> None:

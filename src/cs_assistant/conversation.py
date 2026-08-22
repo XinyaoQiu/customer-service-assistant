@@ -5,6 +5,7 @@ interrupt handshake so a turn either returns a reply or reports that a human now
 the conversation.
 """
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from langgraph.types import Command
@@ -66,6 +67,62 @@ class Conversation:
             escalation_reason=result.get("escalation_reason"),
             state=result,
         )
+
+    def stream(self, message: str) -> Iterator[tuple[str, str]]:
+        """Yield ("progress"|"reply", text) as the turn proceeds.
+
+        Total time is unchanged; what changes is that the publisher sees the assistant
+        working rather than a still cursor. During a slow turn that is the difference
+        between waiting and wondering whether it broke.
+        """
+        payload = (
+            initial_state(message)
+            if not self._started
+            else {"messages": [{"role": "user", "content": message}]}
+        )
+        self._started = True
+
+        interrupted = False
+        seen: set[str] = set()
+
+        def progress(text: str):
+            """Suppress repeats.
+
+            Resuming an interrupt re-runs the node from its start, so every progress
+            line before the interrupt is emitted twice. Harmless for the ticket, which
+            is idempotent, but the publisher would see the message duplicated.
+            """
+            if text not in seen:
+                seen.add(text)
+                return True
+            return False
+
+        for mode, chunk in self.graph.stream(
+            payload, config=self._config, context=self.context,
+            stream_mode=["custom", "updates"],
+        ):
+            if mode == "custom" and "progress" in chunk:
+                if progress(chunk["progress"]):
+                    yield "progress", chunk["progress"]
+            elif mode == "updates":
+                interrupted = interrupted or any(
+                    node == "__interrupt__" for node in chunk
+                )
+
+        # The escalation pause happens mid-stream; resuming completes the handoff.
+        state = self.graph.get_state(self._config)
+        if interrupted or (state and state.next):
+            for mode, chunk in self.graph.stream(
+                Command(resume={"note": None}), config=self._config,
+                context=self.context, stream_mode=["custom", "updates"],
+            ):
+                if mode == "custom" and "progress" in chunk:
+                    if progress(chunk["progress"]):
+                        yield "progress", chunk["progress"]
+            state = self.graph.get_state(self._config)
+
+        reply = (state.values.get("reply") if state else "") or ""
+        yield "reply", reply
 
     def history(self) -> list[dict]:
         snapshot = self.graph.get_state(self._config)

@@ -10,6 +10,7 @@ import concurrent.futures
 import logging
 
 from langchain.agents import create_agent
+from langgraph.config import get_stream_writer
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -29,6 +30,12 @@ from .state import (
 )
 
 log = logging.getLogger(__name__)
+
+_PROGRESS = {
+    Intent.STATUS: "Checking your articles…",
+    Intent.DISTRIBUTION: "Pulling your reach numbers…",
+    Intent.POLICY: "Searching the help centre…",
+}
 
 _AGENT_SYSTEM = {
     Intent.STATUS: """You help publishers understand where their article stands.
@@ -82,12 +89,45 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
 
     def route(state: ConversationState, runtime: Runtime[PublisherContext]) -> dict:
         message = last_user_message(state)
-        routing = classify(message, chat_model=_router_model)
-        return {
+        _emit("Reading your message…")
+
+        # Classification is a model call; the article lookup is a local query that both
+        # database paths need anyway. Running them together hides the cheap one behind
+        # the expensive one instead of paying for both.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            routing_future = pool.submit(classify, message, _router_model)
+            articles_future = pool.submit(
+                _prefetch_articles, runtime.context.publisher_id
+            )
+            routing = routing_future.result()
+            articles = articles_future.result()
+
+        update = {
             "intent": routing.intent.value,
             "intent_confidence": routing.confidence.value,
             "routing_reason": routing.reasoning,
         }
+        if articles:
+            update["pending_articles"] = summarize_articles(articles)
+        return update
+
+    def _prefetch_articles(publisher_id: str) -> list[dict]:
+        try:
+            return db.find_recent_articles(publisher_id, limit=5)
+        except Exception as exc:
+            log.warning("prefetch failed: %s", exc)
+            return []
+
+    def _emit(message: str) -> None:
+        """Report progress to whoever is streaming this run.
+
+        A no-op when nobody is listening, so nodes can narrate unconditionally.
+        """
+        try:
+            if writer := get_stream_writer():
+                writer({"progress": message})
+        except Exception:
+            pass
 
     def _run_agent(state: ConversationState, runtime: Runtime[PublisherContext],
                    intent: Intent) -> dict:
@@ -100,10 +140,22 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
         waiting with no bound at all.
         """
         agent = _agents[intent]
+        _emit(_PROGRESS[intent])
+
+        prompt = last_user_message(state)
+        if prefetched := state.get("pending_articles"):
+            # Saves the agent an opening round on the two paths that always start here.
+            listing = "\n".join(
+                f"- {a['article_id']}: {a['title']} ({a.get('status')})" for a in prefetched
+            )
+            prompt = (
+                f"{prompt}\n\n[Their recent articles, already retrieved:\n{listing}\n"
+                "Use these instead of looking them up again.]"
+            )
 
         def run():
             return agent.invoke(
-                {"messages": [{"role": "user", "content": last_user_message(state)}]},
+                {"messages": [{"role": "user", "content": prompt}]},
                 config={"recursion_limit": settings.agent_max_rounds * 2},
                 context=runtime.context,
             )
@@ -221,6 +273,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
             "message": last_user_message(state),
         }
 
+        _emit("Passing this to a specialist…")
         decision = interrupt({"escalation": payload})
 
         # Deterministic across replays, so the second attempt finds the first ticket

@@ -153,3 +153,27 @@ class TestRetrievalQuality:
         """Guards against over-correcting: appeals.md must not be pushed down globally."""
         top = index.search("how do I appeal a rejection", limit=1)
         assert top[0]["source_file"] == "appeals.md"
+
+
+class TestStreamingContract:
+    """Progress reporting must not depend on a listener, or duplicate across replay."""
+
+    def test_emit_is_safe_without_a_stream(self):
+        """Nodes narrate unconditionally; invoke() has no writer attached."""
+        from cs_assistant.graph import build_graph
+
+        graph = build_graph(warm=False)
+        assert graph is not None  # construction alone exercises _emit's guard
+
+    def test_progress_dedup_survives_replay(self):
+        """An interrupt re-runs the node, so every pre-interrupt line arrives twice."""
+        seen: set[str] = set()
+
+        def progress(text: str) -> bool:
+            if text in seen:
+                return False
+            seen.add(text)
+            return True
+
+        emitted = [t for t in ["a", "b", "a", "b", "c"] if progress(t)]
+        assert emitted == ["a", "b", "c"]

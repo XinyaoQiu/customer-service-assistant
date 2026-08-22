@@ -5,6 +5,7 @@ strategy never risks the authoritative content, which stays in the markdown file
 """
 
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -129,10 +130,13 @@ class PolicyIndex:
         model = init_chat_model(
             self.settings.chat_model, api_key=self.settings.google_api_key
         )
-        for chunk in chunks:
-            chunk.query_variants = generate(
-                model, chunk.title, chunk.heading_path, chunk.text
-            )
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {
+                pool.submit(generate, model, c.title, c.heading_path, c.text): c
+                for c in chunks
+            }
+            for future in futures:
+                futures[future].query_variants = future.result()
 
     def _client(self):
         return weaviate.connect_to_local(
@@ -218,10 +222,15 @@ class PolicyIndex:
         return self.reranker.rerank(query, hits, top_k=limit)
 
     def _hybrid(self, query: str, *, locale: str, limit: int) -> list[dict]:
-        vector = self._embeddings.embed_query(query)
-        today = date.today().isoformat()
+        # Embedding is a network call and opening the Weaviate connection is another;
+        # neither depends on the other, so they overlap.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            vector_future = pool.submit(self._embeddings.embed_query, query)
+            client_future = pool.submit(self._client)
+            vector = vector_future.result()
+            client = client_future.result()
 
-        client = self._client()
+        today = date.today().isoformat()
         try:
             collection = client.collections.get(self.collection_name)
             response = collection.query.hybrid(

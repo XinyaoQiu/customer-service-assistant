@@ -49,7 +49,10 @@ class Settings(BaseModel):
     # to the model's judgment.
     max_clarifications: int = 2
     agent_max_rounds: int = 4
-    agent_timeout_seconds: float = 15.0
+    # Measured: retrieval ~0.8s and one model call ~0.9s, but a three-round agent
+    # measured at 37s end to end. The bound exists to stop runaway loops, not to force
+    # a fast answer — cutting off correct work produces an escalation nobody needed.
+    agent_timeout_seconds: float = 90.0
 
     @property
     def mysql_dsn(self) -> dict:

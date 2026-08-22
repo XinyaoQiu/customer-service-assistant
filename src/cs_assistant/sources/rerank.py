@@ -46,6 +46,21 @@ class Reranker:
         self.model_name = model_name
         self.enabled = enabled
 
+    def warm(self) -> bool:
+        """Load the model ahead of first use.
+
+        Loading takes long enough to consume a turn's entire budget, which would make
+        the first publisher of the day the one who waits.
+        """
+        if not self.enabled:
+            return False
+        try:
+            _load(self.model_name)
+            return True
+        except Exception as exc:
+            logger.warning("reranker warmup failed: %s", exc)
+            return False
+
     def rerank(self, query: str, hits: list[dict], top_k: int = 5) -> list[dict]:
         """Score each (query, chunk) pair and keep the best.
 

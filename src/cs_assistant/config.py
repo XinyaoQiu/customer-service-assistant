@@ -36,8 +36,13 @@ class Settings(BaseModel):
     # Retrieval casts wide, the reranker narrows. Hybrid fusion merges candidate lists
     # but cannot tell whether a passage answers the question.
     rerank_enabled: bool = True
-    rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    retrieval_candidates: int = 20
+    # Multilingual. An English-only reranker (ms-marco-MiniLM) scored 0/4 on Spanish
+    # phrasings absent from query_variants, landing on unrelated documents every time —
+    # for a publisher base with many non-native English speakers that path is simply
+    # broken, which outweighs this model being slower.
+    rerank_model: str = "BAAI/bge-reranker-v2-m3"
+    # Trimmed from 20: the reranker dominates latency, and a publisher is waiting.
+    retrieval_candidates: int = 10
 
     # Two clarifying turns, then a human. A loop of clarifying questions is the most
     # frustrating failure mode in support chat, so the cap is enforced rather than left
@@ -72,4 +77,5 @@ class Settings(BaseModel):
             weaviate_port=int(os.getenv("WEAVIATE_PORT", "8080")),
             policy_dir=os.getenv("POLICY_DIR", "policies"),
             rerank_enabled=os.getenv("RERANK_ENABLED", "1").lower() not in ("0", "false"),
+            rerank_model=os.getenv("RERANK_MODEL", "BAAI/bge-reranker-v2-m3"),
         )

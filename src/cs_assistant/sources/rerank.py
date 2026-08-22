@@ -15,7 +15,7 @@ from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+DEFAULT_MODEL = "BAAI/bge-reranker-v2-m3"
 
 
 @lru_cache(maxsize=2)

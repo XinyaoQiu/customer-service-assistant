@@ -180,7 +180,7 @@ class PolicyIndex:
             client.close()
 
     def search(
-        self, query: str, *, locale: str = "en", limit: int = 5, candidates: int = 20
+        self, query: str, *, locale: str = "en", limit: int = 5, candidates: int | None = None
     ) -> list[dict]:
         """Hybrid retrieval, then cross-encoder rerank.
 
@@ -194,7 +194,9 @@ class PolicyIndex:
         and never as a prompt instruction: an expired policy must not reach the prompt
         at all.
         """
-        hits = self._hybrid(query, locale=locale, limit=candidates)
+        hits = self._hybrid(
+            query, locale=locale, limit=candidates or self.settings.retrieval_candidates
+        )
         return self.reranker.rerank(query, hits, top_k=limit)
 
     def _hybrid(self, query: str, *, locale: str, limit: int) -> list[dict]:

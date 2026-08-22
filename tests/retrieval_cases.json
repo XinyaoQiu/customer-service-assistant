@@ -1,0 +1,74 @@
+[
+  {
+    "query": "where is my money",
+    "locale": "en",
+    "expect_file": "settlement.md",
+    "note": "colloquial English; the document says 'settlement', never 'money'"
+  },
+  {
+    "query": "when do I get paid for last month",
+    "locale": "en",
+    "expect_file": "settlement.md",
+    "note": "natural phrasing of the payout cycle question"
+  },
+  {
+    "query": "cuándo me pagan",
+    "locale": "es",
+    "expect_file": "settlement.md",
+    "note": "Spanish; MS MARCO models have no useful signal here"
+  },
+  {
+    "query": "why was my article marked duplicate",
+    "locale": "en",
+    "expect_file": "originality.md",
+    "note": "appeals.md shares vocabulary and outranks it on hybrid alone"
+  },
+  {
+    "query": "can I repost something I already published elsewhere",
+    "locale": "en",
+    "expect_file": "originality.md",
+    "note": "self-syndication, asked without using the policy's terms"
+  },
+  {
+    "query": "contenido original que significa",
+    "locale": "es",
+    "expect_file": "originality.md",
+    "note": "Spanish originality question"
+  },
+  {
+    "query": "how long does review take",
+    "locale": "en",
+    "expect_file": "review-process.md",
+    "note": "review-process and appeals both discuss timing"
+  },
+  {
+    "query": "my article is still pending after two days",
+    "locale": "en",
+    "expect_file": "review-process.md",
+    "note": "SLA question phrased as a complaint"
+  },
+  {
+    "query": "how do I appeal a rejection",
+    "locale": "en",
+    "expect_file": "appeals.md",
+    "note": "the case appeals.md should legitimately win"
+  },
+  {
+    "query": "can I use a photo I found on google",
+    "locale": "en",
+    "expect_file": "copyright.md",
+    "note": "licensing asked in lay terms"
+  },
+  {
+    "query": "why did my views drop this month",
+    "locale": "en",
+    "expect_file": "distribution.md",
+    "note": "reach question; must not land on review or appeals"
+  },
+  {
+    "query": "por qué bajaron mis vistas",
+    "locale": "es",
+    "expect_file": "distribution.md",
+    "note": "Spanish reach question"
+  }
+]

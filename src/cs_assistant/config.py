@@ -33,6 +33,12 @@ class Settings(BaseModel):
 
     policy_dir: str = "policies"
 
+    # Retrieval casts wide, the reranker narrows. Hybrid fusion merges candidate lists
+    # but cannot tell whether a passage answers the question.
+    rerank_enabled: bool = True
+    rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    retrieval_candidates: int = 20
+
     # Two clarifying turns, then a human. A loop of clarifying questions is the most
     # frustrating failure mode in support chat, so the cap is enforced rather than left
     # to the model's judgment.
@@ -65,4 +71,5 @@ class Settings(BaseModel):
             weaviate_host=os.getenv("WEAVIATE_HOST", "127.0.0.1"),
             weaviate_port=int(os.getenv("WEAVIATE_PORT", "8080")),
             policy_dir=os.getenv("POLICY_DIR", "policies"),
+            rerank_enabled=os.getenv("RERANK_ENABLED", "1").lower() not in ("0", "false"),
         )

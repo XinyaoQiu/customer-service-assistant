@@ -14,6 +14,7 @@ import weaviate.classes as wvc
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 from ..config import Settings
+from .rerank import Reranker
 
 
 @dataclass
@@ -116,6 +117,9 @@ class PolicyIndex:
             model=settings.embedding_model,
             google_api_key=settings.google_api_key,
         )
+        self.reranker = Reranker(
+            model_name=settings.rerank_model, enabled=settings.rerank_enabled
+        )
 
     def _client(self):
         return weaviate.connect_to_local(
@@ -147,6 +151,9 @@ class PolicyIndex:
                     wvc.config.Property(name="text", data_type=wvc.config.DataType.TEXT),
                     wvc.config.Property(name="effective_from", data_type=wvc.config.DataType.TEXT),
                     wvc.config.Property(name="locales", data_type=wvc.config.DataType.TEXT_ARRAY),
+                    wvc.config.Property(
+                        name="query_variants", data_type=wvc.config.DataType.TEXT_ARRAY
+                    ),
                     wvc.config.Property(name="source_file", data_type=wvc.config.DataType.TEXT),
                 ],
             )
@@ -163,6 +170,7 @@ class PolicyIndex:
                             "text": chunk.text,
                             "effective_from": chunk.effective_from,
                             "locales": chunk.locales,
+                            "query_variants": chunk.query_variants,
                             "source_file": chunk.source_file,
                         },
                         vector=vector,
@@ -171,16 +179,25 @@ class PolicyIndex:
         finally:
             client.close()
 
-    def search(self, query: str, *, locale: str = "en", limit: int = 5) -> list[dict]:
-        """Hybrid search: BM25 for exact tokens, vectors for paraphrase.
+    def search(
+        self, query: str, *, locale: str = "en", limit: int = 5, candidates: int = 20
+    ) -> list[dict]:
+        """Hybrid retrieval, then cross-encoder rerank.
 
         Policy IDs and product names are exact tokens that dense retrieval blurs;
-        colloquial phrasing is what dense retrieval is for. Both matter, so both run.
+        colloquial phrasing is what dense retrieval is for. Both matter, so both run —
+        but fusing two candidate lists says nothing about whether a passage answers the
+        question. Retrieval casts a wide net (`candidates`); the reranker decides which
+        few reach the prompt.
 
         Effective-date and locale filtering happen in the query, never as a post-filter
         and never as a prompt instruction: an expired policy must not reach the prompt
         at all.
         """
+        hits = self._hybrid(query, locale=locale, limit=candidates)
+        return self.reranker.rerank(query, hits, top_k=limit)
+
+    def _hybrid(self, query: str, *, locale: str, limit: int) -> list[dict]:
         vector = self._embeddings.embed_query(query)
         today = date.today().isoformat()
 
@@ -204,6 +221,7 @@ class PolicyIndex:
                     "title": o.properties["title"],
                     "heading_path": o.properties["heading_path"],
                     "text": o.properties["text"],
+                    "query_variants": o.properties.get("query_variants", []),
                     "source_file": o.properties["source_file"],
                     "score": o.metadata.score,
                 }

@@ -1,13 +1,16 @@
-"""Tools, grouped by which path may use them.
+"""The assistant's tools.
 
 `publisher_id` is never a tool parameter. It arrives through `ToolRuntime`, which the
 tool executor fills from the trusted context after stripping whatever the model tried to
-put there. Cross-tenant access is therefore not forbidden — it is unavailable.
+put there — verified, not assumed. Cross-tenant access is unavailable rather than
+forbidden.
 
-The groupings are the second half of the same idea: the policy path is handed no
-database tools, so a policy question cannot read article records however the
-conversation is steered.
+One agent holds all of these. Splitting them across per-intent agents added no isolation
+that `create_agent` does not already provide, and cost the ability to answer a message
+that spans two topics.
 """
+
+from . import reasons
 
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
@@ -43,37 +46,40 @@ def find_recent_articles(runtime: ToolRuntime, limit: int = 5) -> list[dict]:
     most common reason someone writes in.
     """
     articles = _db.find_recent_articles(runtime.context.publisher_id, limit=limit)
-    return [
-        {
-            "article_id": a["article_id"],
-            "title": a["title"],
-            "status": a["status"],
-            "reason_code": a["reason_code"],
-            "submitted_at": str(a["submitted_at"]),
-            "appealable": bool(a["appealable"]),
-        }
-        for a in articles
-    ]
+    return [_render_article(a) for a in articles]
+
+
+def _render_article(row: dict) -> dict:
+    """Shape one article for the agent.
+
+    The review outcome arrives as a code and leaves as the message publishers are meant
+    to read — the same split as an HTTP status and its reason phrase.
+    """
+    reason = reasons.lookup(row.get("reason_code"))
+    rendered = {
+        "article_id": row["article_id"],
+        "title": row["title"],
+        "status": row["status"],
+        "submitted_at": str(row["submitted_at"]),
+    }
+    if reason:
+        rendered["reason"] = reason.message
+        rendered["reason_code"] = reason.code
+        rendered["appealable"] = reason.appealable
+    return rendered
 
 
 @tool
 def get_article_status(article_id: str, runtime: ToolRuntime) -> dict:
-    """Review status for one article the publisher owns.
-
-    Returns the reason code, never the reviewer's internal note.
-    """
+    """Review status for one article the publisher owns."""
     article = _db.get_article(runtime.context.publisher_id, article_id)
     if not article:
         return {"error": "No such article on this account."}
-    return {
-        "article_id": article["article_id"],
-        "title": article["title"],
-        "status": article["status"],
-        "reason_code": article["reason_code"],
-        "submitted_at": str(article["submitted_at"]),
-        "reviewed_at": str(article["reviewed_at"]) if article["reviewed_at"] else None,
-        "appealable": bool(article["appealable"]),
-    }
+
+    rendered = _render_article(article)
+    if article["reviewed_at"]:
+        rendered["reviewed_at"] = str(article["reviewed_at"])
+    return rendered
 
 
 @tool
@@ -124,7 +130,21 @@ def search_policy(query: str, runtime: ToolRuntime) -> list[dict]:
     ]
 
 
-STATUS_TOOLS = [find_recent_articles, get_article_status, search_policy]
-DISTRIBUTION_TOOLS = [find_recent_articles, get_article_reach, search_policy]
-POLICY_TOOLS = [search_policy]
-# High risk gets none: that path escalates without looking anything up.
+@tool
+def request_escalation(summary: str, runtime: ToolRuntime) -> str:
+    """Hand the conversation to a human when you cannot resolve it.
+
+    Use this when the answer needs an action you cannot take, when the publisher asks
+    for detail you were not given, or when they ask for a person. Say what you already
+    told them in the summary so they do not have to repeat themselves.
+    """
+    return f"ESCALATION_REQUESTED: {summary}"
+
+
+ALL_TOOLS = [
+    find_recent_articles,
+    get_article_status,
+    get_article_reach,
+    search_policy,
+    request_escalation,
+]

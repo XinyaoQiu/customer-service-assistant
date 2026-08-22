@@ -10,33 +10,35 @@ Design: [docs/tech-design.md](docs/tech-design.md).
 ```
 publisher message
       ↓
-route_intent            rules first, model for the tail
-      ↓
- ┌────────────┬──────────────┬─────────────┬───────────┐
- status        distribution   policy        high risk
- (MySQL)       (MySQL)        (Weaviate)    (no lookup)
-      └────────────┴──────────────┘              ↓
-                   ↓                        interrupt →
-              compose                       human takes over
-        disposition table decides                ↓
-        what may be said                    ticket + reply
+triage        rules: does this need a person to act?      ─── yes ──┐
+      ↓ no    (and prefetch their articles meanwhile)               │
+   agent      one agent, five tools                                 │
+      ↓       it may also ask for a human ──────────────────────────┤
+    reply                                                    escalate
+                                                    interrupt → ticket
 ```
 
-Three ideas run through this:
+**A review outcome is a code and a message, like an HTTP status.** The database stores
+`duplicate_content`; the backend owns the sentence "This article closely matches content
+already published on the platform." The assistant reads the code, looks up the message,
+and says it. Someone whose work was rejected is owed an explanation — withholding it only
+makes them wait for a human to repeat it.
 
-**Routing is a security boundary, not a convenience.** The intent decides which tools the
-turn gets. The policy path holds no database tools at all, so a policy question is
-structurally incapable of reading article records regardless of how the conversation is
-steered.
+**What it cannot say, it was never given.** Thresholds live in the review service's
+configuration, not in the database and not in this system. "You exceeded the daily upload
+limit" is answerable; "the limit is 40" is not, because the number is nowhere in the
+assistant's reach. That is a stronger guarantee than instructing a model to stay quiet,
+which a determined publisher can talk around.
 
 **Identity is injected, never model-supplied.** `publisher_id` arrives through the
 graph's runtime context. The tool executor strips whatever the model puts in an injected
-argument and substitutes the trusted value — verified, not assumed.
+argument and substitutes the trusted value — verified against the installed library, not
+assumed.
 
-**What may be said is code.** The disposition table decides whether a rejection reason can
-be disclosed. Anti-abuse findings, monetization holds, and account restrictions always go
-to a human: any specific account of *why* content was flagged is useful to whoever is
-evading detection, and the person asking may be that person.
+**Rules decide what needs a person; the model decides everything else.** Account
+restrictions, payment holds, and a direct request for a human skip the agent, because
+those need someone to *act* and no explanation substitutes. Which tools to call, how many
+times, and how to word the answer are the model's.
 
 ## Setup
 

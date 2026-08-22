@@ -1,14 +1,11 @@
 """MySQL access.
 
-Two rules hold here rather than in a prompt:
-
-`reason_detail` is never selected by the publisher-facing queries. Not selected, not
-returned, not available to be leaked — a prompt instruction is not a security boundary,
-and both publisher messages and retrieved content are injection vectors.
-
 `publisher_id` always arrives as an argument from the request context. No query takes it
 from anything the model produced, which makes cross-tenant reads structurally impossible
 rather than merely forbidden.
+
+Review outcomes are codes; the publisher-facing wording lives in `reasons.py`. There is
+no free-text reviewer note in this schema, so there is nothing here to filter.
 """
 
 import uuid
@@ -24,13 +21,16 @@ SEED = Path(__file__).parent / "seed.sql"
 
 
 def _split_statements(sql: str) -> list[str]:
-    """Split on statement boundaries, ignoring semicolons inside string literals.
+    """Split on statement boundaries.
 
-    Reviewer notes are prose and contain punctuation; splitting naively on ";" cuts an
-    INSERT in half and produces a syntax error that reads like bad data.
+    Comments are stripped first. An apostrophe in prose ("the backend owns it") would
+    otherwise be read as opening a string literal, and every semicolon after it would
+    stop being a boundary — producing a syntax error that points at the wrong line.
     """
+    lines = [ln for ln in sql.splitlines() if not ln.lstrip().startswith("--")]
+
     statements, current, in_string = [], [], False
-    for char in sql:
+    for char in "\n".join(lines):
         if char == "'":
             in_string = not in_string
         if char == ";" and not in_string:
@@ -41,7 +41,7 @@ def _split_statements(sql: str) -> list[str]:
             current.append(char)
     if stmt := "".join(current).strip():
         statements.append(stmt)
-    return [s for s in statements if not s.startswith("--")]
+    return statements
 
 
 class BusinessDB:
@@ -57,8 +57,17 @@ class BusinessDB:
         finally:
             conn.close()
 
-    def init_schema(self, seed: bool = False) -> None:
-        statements = _split_statements(SCHEMA.read_text())
+    def init_schema(self, seed: bool = False, *, drop: bool = False) -> None:
+        statements = []
+        if drop:
+            # CREATE TABLE IF NOT EXISTS keeps an outdated table as-is, so a column that
+            # was removed lingers and inserts fail on a count mismatch.
+            statements += [
+                f"DROP TABLE IF EXISTS {name}"
+                for name in ("escalations", "article_stats", "article_reviews",
+                             "articles", "publishers")
+            ]
+        statements += _split_statements(SCHEMA.read_text())
         if seed:
             statements += _split_statements(SEED.read_text())
         with self._connect() as conn, conn.cursor() as cur:
@@ -137,20 +146,6 @@ class BusinessDB:
             row["baseline"] = cur.fetchone()
             return row
 
-    def reason_detail_for_agent(self, article_id: str) -> str | None:
-        """Reviewer notes, for the escalation payload only.
-
-        Named so its one legitimate caller is obvious. The human agent picking up the
-        ticket needs this; it must never reach a publisher-facing prompt.
-        """
-        with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT reason_detail FROM article_reviews WHERE article_id = %s",
-                (article_id,),
-            )
-            row = cur.fetchone()
-            return row["reason_detail"] if row else None
-
     def create_escalation(
         self,
         *,
@@ -174,17 +169,16 @@ class BusinessDB:
             if existing := cur.fetchone():
                 return existing["ticket_id"]
 
-            detail = self.reason_detail_for_agent(article_id) if article_id else None
             ticket_id = f"ESC-{uuid.uuid4().hex[:12]}"
             cur.execute(
                 """
                 INSERT INTO escalations (
-                    ticket_id, publisher_id, article_id, reason_code, reason_detail,
+                    ticket_id, publisher_id, article_id, reason_code,
                     publisher_message, transcript, created_at, idempotency_key
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
-                    ticket_id, publisher_id, article_id, reason_code, detail,
+                    ticket_id, publisher_id, article_id, reason_code,
                     publisher_message, transcript, datetime.now(), idempotency_key,
                 ),
             )

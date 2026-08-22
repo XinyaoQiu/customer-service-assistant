@@ -1,8 +1,8 @@
 -- Publisher-facing business data.
 --
--- `reason_detail` lives here but never leaves the tool layer: reviewer notes read like
--- "suspected content laundering, high overlap with site X", and showing one to a
--- publisher is an incident. The queries in business_db.py do not select it.
+-- Review outcomes are a code and nothing else, the way an HTTP status is. The message a
+-- publisher reads is a fixed string the backend owns (see reasons.py); it is not stored
+-- per row, and there is no free-text reviewer note to leak.
 
 CREATE TABLE IF NOT EXISTS publishers (
     publisher_id   VARCHAR(32) PRIMARY KEY,
@@ -25,8 +25,7 @@ CREATE TABLE IF NOT EXISTS articles (
 CREATE TABLE IF NOT EXISTS article_reviews (
     article_id     VARCHAR(32) PRIMARY KEY,
     status         VARCHAR(24) NOT NULL,
-    reason_code    VARCHAR(32) NULL,
-    reason_detail  TEXT NULL,
+    reason_code    VARCHAR(40) NULL,
     reviewed_at    DATETIME NULL,
     appealable     BOOLEAN NOT NULL DEFAULT FALSE
 );
@@ -44,13 +43,12 @@ CREATE TABLE IF NOT EXISTS escalations (
     ticket_id      VARCHAR(64) PRIMARY KEY,
     publisher_id   VARCHAR(32) NOT NULL,
     article_id     VARCHAR(32) NULL,
-    reason_code    VARCHAR(32) NULL,
-    reason_detail  TEXT NULL,
+    reason_code    VARCHAR(40) NULL,
     publisher_message TEXT NOT NULL,
     transcript     TEXT NULL,
     created_at     DATETIME NOT NULL,
-    -- Interrupts re-run a node from its start, so the same escalation can be attempted
-    -- twice. The unique key makes the second attempt a no-op instead of a second ticket.
+    -- Resuming an interrupt re-runs the node from its start, so one escalation can be
+    -- attempted twice. The unique key makes the second attempt a lookup.
     idempotency_key VARCHAR(128) NOT NULL,
     UNIQUE KEY uniq_idem (idempotency_key)
 );

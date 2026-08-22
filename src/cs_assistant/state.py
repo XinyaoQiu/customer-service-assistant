@@ -12,8 +12,6 @@ from typing import Annotated, Any
 
 from typing_extensions import TypedDict
 
-from .routing import Confidence, Intent
-
 
 @dataclass
 class PublisherContext:
@@ -34,21 +32,10 @@ class ConversationState(TypedDict, total=False):
 
     messages: Annotated[list[dict], add]
 
-    intent: str
-    intent_confidence: str
-    routing_reason: str
-
-    # The articles just offered for disambiguation. "The second one" resolves against
-    # this list, so the model picks an index rather than inventing an article id.
+    # Fetched during triage and handed to the agent, so it opens with the data rather
+    # than spending a round retrieving it.
     pending_articles: list[dict]
     subject_article_id: str | None
-
-    # Enforced in code: a loop of clarifying questions is the most frustrating failure
-    # mode in support chat, so the count is state, not a judgment call.
-    clarification_count: int
-
-    findings: list[str]
-    policy_hits: list[dict]
 
     escalated: bool
     escalation_ticket: str | None
@@ -72,15 +59,6 @@ def last_user_message(state: ConversationState) -> str:
         if message.get("role") == "user":
             return message.get("content", "")
     return ""
-
-
-def needs_escalation(state: ConversationState) -> bool:
-    """Whether this conversation has run out of automated options."""
-    return (
-        state.get("intent") == Intent.HIGH_RISK.value
-        or state.get("intent_confidence") == Confidence.LOW.value
-        or state.get("escalated", False)
-    )
 
 
 def as_transcript(state: ConversationState, limit: int = 20) -> str:

@@ -7,12 +7,14 @@ publisher may be told.
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
 
 from cs_assistant.config import Settings
-from cs_assistant.disposition import Action, for_pending, for_reason, is_always_escalated
+from cs_assistant.reasons import REASONS, lookup, needs_human
+from cs_assistant.routing import needs_human_immediately
 from cs_assistant.sources.policy import load_chunks
 
 CASES = json.loads((Path(__file__).parent / "retrieval_cases.json").read_text())
@@ -23,42 +25,63 @@ needs_stack = pytest.mark.skipif(
 )
 
 
-class TestDisposition:
-    """These decide what may be said, so they are code and they are tested."""
+class TestReasons:
+    """A review outcome is a code and a fixed message, the way an HTTP status is."""
 
-    def test_anti_abuse_always_escalates(self):
-        # Explaining why content was flagged hands the person evading detection a
-        # feedback signal — and the person asking may be that person.
-        d = for_reason("spam_detection")
-        assert d.action is Action.ESCALATE
-        assert d.disclosable is False
+    def test_every_rejection_gives_the_publisher_a_reason(self):
+        # Someone whose work was rejected is owed an explanation. Withholding it only
+        # makes them wait for a human to say the same thing.
+        for code, reason in REASONS.items():
+            assert reason.message, code
+            assert len(reason.message) > 20, f"{code}: message is not an explanation"
 
-    def test_monetization_hold_always_escalates(self):
-        assert for_reason("monetization_hold").action is Action.ESCALATE
+    def test_messages_state_no_thresholds(self):
+        """Wording says what happened, never the number behind it.
 
-    def test_account_restriction_always_escalates(self):
-        assert for_reason("account_restriction").action is Action.ESCALATE
+        The assistant is never given the limit, so this is about the fixed strings
+        themselves not leaking one.
+        """
+        for code, reason in REASONS.items():
+            assert not re.search(r"\b\d{2,}\b", reason.message), f"{code} names a number"
 
-    def test_unknown_reason_code_defaults_to_escalation(self):
-        # A reason code nobody has classified must not fall through to "answer freely".
-        assert for_reason("some_new_code_added_next_quarter").action is Action.ESCALATE
-        assert for_reason(None).action is Action.ESCALATE
+    def test_unknown_code_routes_to_a_human(self):
+        unknown = lookup("some_code_added_next_quarter")
+        assert unknown.needs_human
+        assert unknown.message
 
-    def test_copyright_is_answerable_with_appeal(self):
-        d = for_reason("copyright")
-        assert d.action is Action.ANSWER
-        assert d.show_appeal_link
+    def test_no_outcome_means_no_reason(self):
+        # Pending and published articles carry no code, and that is not an error.
+        assert lookup(None) is None
 
-    def test_pending_within_sla_answers_with_timing(self):
-        assert for_pending(hours_waiting=12).action is Action.ANSWER
+    def test_only_actionable_outcomes_need_a_human(self):
+        # A person must lift a restriction or release a hold; explaining a duplicate
+        # rejection needs nobody.
+        assert needs_human("account_restricted")
+        assert needs_human("monetization_hold")
+        assert not needs_human("duplicate_content")
+        assert not needs_human("spam_behavior")
+        assert not needs_human("rate_limit_exceeded")
 
-    def test_pending_past_sla_escalates(self):
-        assert for_pending(hours_waiting=96).action is Action.ESCALATE
 
-    def test_permanently_escalating_topics(self):
-        for code in ("spam_detection", "monetization_hold", "account_restriction"):
-            assert is_always_escalated(code)
-        assert not is_always_escalated("copyright")
+class TestImmediateEscalation:
+    """Rules, not a model: a model can be argued out of a judgment."""
+
+    def test_account_and_payment_reach_a_person(self):
+        assert needs_human_immediately("my account was suspended, why?")
+        assert needs_human_immediately("my payment is being withheld")
+        assert needs_human_immediately("cuenta suspendida?")
+
+    def test_asking_for_a_person_is_honoured(self):
+        assert needs_human_immediately("I want to talk to a human")
+
+    def test_ordinary_questions_reach_the_agent(self):
+        for message in (
+            "why was my article rejected?",
+            "what counts as original content?",
+            "why did my views drop?",
+            "when do I get paid?",
+        ):
+            assert needs_human_immediately(message) is None, message
 
 
 class TestChunking:
@@ -158,12 +181,12 @@ class TestRetrievalQuality:
 class TestStreamingContract:
     """Progress reporting must not depend on a listener, or duplicate across replay."""
 
-    def test_emit_is_safe_without_a_stream(self):
-        """Nodes narrate unconditionally; invoke() has no writer attached."""
+    @needs_stack
+    def test_graph_builds(self):
+        """Nodes narrate unconditionally; _emit must be a no-op without a writer."""
         from cs_assistant.graph import build_graph
 
-        graph = build_graph(warm=False)
-        assert graph is not None  # construction alone exercises _emit's guard
+        assert build_graph(warm=False) is not None
 
     def test_progress_dedup_survives_replay(self):
         """An interrupt re-runs the node, so every pre-interrupt line arrives twice."""

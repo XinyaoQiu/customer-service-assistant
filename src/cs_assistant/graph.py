@@ -66,9 +66,23 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
         name = settings.chat_model_deep if deep else settings.chat_model
         return init_chat_model(name, api_key=settings.google_api_key)
 
+    # Built once. Constructing an agent binds tool schemas to the model, and repeating
+    # that per turn adds latency to every reply for no benefit.
+    _agents = {
+        intent: create_agent(
+            model=model(deep=True), tools=toolset, system_prompt=_AGENT_SYSTEM[intent]
+        )
+        for intent, toolset in (
+            (Intent.STATUS, tools.STATUS_TOOLS),
+            (Intent.DISTRIBUTION, tools.DISTRIBUTION_TOOLS),
+            (Intent.POLICY, tools.POLICY_TOOLS),
+        )
+    }
+    _router_model = model()
+
     def route(state: ConversationState, runtime: Runtime[PublisherContext]) -> dict:
         message = last_user_message(state)
-        routing = classify(message, chat_model=model())
+        routing = classify(message, chat_model=_router_model)
         return {
             "intent": routing.intent.value,
             "intent_confidence": routing.confidence.value,
@@ -76,7 +90,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
         }
 
     def _run_agent(state: ConversationState, runtime: Runtime[PublisherContext],
-                   intent: Intent, toolset: list) -> dict:
+                   intent: Intent) -> dict:
         """Run one path's agent inside its own tool set.
 
         Two budgets, because they bound different things. `recursion_limit` caps tool
@@ -85,11 +99,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
         completion under `timeout=0.2` — so relying on it would leave a publisher
         waiting with no bound at all.
         """
-        agent = create_agent(
-            model=model(deep=True),
-            tools=toolset,
-            system_prompt=_AGENT_SYSTEM[intent],
-        )
+        agent = _agents[intent]
 
         def run():
             return agent.invoke(
@@ -166,13 +176,13 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
         return []
 
     def status_agent(state, runtime):
-        return _run_agent(state, runtime, Intent.STATUS, tools.STATUS_TOOLS)
+        return _run_agent(state, runtime, Intent.STATUS)
 
     def distribution_agent(state, runtime):
-        return _run_agent(state, runtime, Intent.DISTRIBUTION, tools.DISTRIBUTION_TOOLS)
+        return _run_agent(state, runtime, Intent.DISTRIBUTION)
 
     def policy_agent(state, runtime):
-        return _run_agent(state, runtime, Intent.POLICY, tools.POLICY_TOOLS)
+        return _run_agent(state, runtime, Intent.POLICY)
 
     def clarify(state: ConversationState, runtime: Runtime[PublisherContext]) -> dict:
         """Ask one question. The cap is enforced by the router, not here."""
@@ -183,7 +193,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
             f"Their message: {last_user_message(state)}"
         )
         try:
-            question = model().invoke(prompt).content
+            question = _text_of(_router_model.invoke(prompt).content)
         except Exception:
             question = (
                 "Could you tell me a bit more about what you need help with — "

@@ -3,11 +3,6 @@ policy_id: POL-DIS-006
 title: Reach and distribution
 effective_from: 2026-06-15
 locales: [en, es]
-query_variants:
-  - "why did my views drop"
-  - "how do I get more readers"
-  - "my article got no impressions"
-  - "por qué bajaron mis vistas"
 ---
 
 ## Distribution > What creators can see

@@ -3,11 +3,6 @@ policy_id: POL-CON-002
 title: Original content requirements
 effective_from: 2026-05-15
 locales: [en, es]
-query_variants:
-  - "what counts as original"
-  - "why was my article marked duplicate"
-  - "can I republish my own work"
-  - "contenido original"
 ---
 
 ## Original Content > What qualifies

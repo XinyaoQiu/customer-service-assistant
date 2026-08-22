@@ -3,10 +3,6 @@ policy_id: POL-CON-003
 title: Image and media licensing
 effective_from: 2026-04-01
 locales: [en]
-query_variants:
-  - "can I use photos from the internet"
-  - "why was my photo rejected"
-  - "image license"
 ---
 
 ## Media Licensing > Permitted sources

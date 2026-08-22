@@ -3,11 +3,6 @@ policy_id: POL-REV-005
 title: How review works
 effective_from: 2026-03-01
 locales: [en, es]
-query_variants:
-  - "how long does review take"
-  - "why is my article still pending"
-  - "when will it be published"
-  - "cuánto tarda la revisión"
 ---
 
 ## Review > Timing

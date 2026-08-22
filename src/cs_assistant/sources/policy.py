@@ -5,7 +5,7 @@ strategy never risks the authoritative content, which stays in the markdown file
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
@@ -25,8 +25,9 @@ class PolicyChunk:
     text: str
     effective_from: str
     locales: list[str]
-    query_variants: list[str]
     source_file: str
+    # Populated at index time, not parsed from the document.
+    query_variants: list[str] = field(default_factory=list)
 
     @property
     def embed_text(self) -> str:
@@ -102,7 +103,6 @@ def load_chunks(policy_dir: Path) -> list[PolicyChunk]:
                     text=text,
                     effective_from=meta.get("effective_from", "1970-01-01"),
                     locales=meta.get("locales", ["en"]),
-                    query_variants=meta.get("query_variants", []),
                     source_file=path.name,
                 )
             )
@@ -121,6 +121,19 @@ class PolicyIndex:
             model_name=settings.rerank_model, enabled=settings.rerank_enabled
         )
 
+    def _attach_variants(self, chunks: list[PolicyChunk]) -> None:
+        from langchain.chat_models import init_chat_model
+
+        from .variants import generate
+
+        model = init_chat_model(
+            self.settings.chat_model, api_key=self.settings.google_api_key
+        )
+        for chunk in chunks:
+            chunk.query_variants = generate(
+                model, chunk.title, chunk.heading_path, chunk.text
+            )
+
     def _client(self):
         return weaviate.connect_to_local(
             host=self.settings.weaviate_host,
@@ -128,14 +141,19 @@ class PolicyIndex:
             grpc_port=self.settings.weaviate_grpc_port,
         )
 
-    def rebuild(self, policy_dir: Path) -> int:
+    def rebuild(self, policy_dir: Path, *, with_variants: bool = True) -> int:
         """Full idempotent rebuild.
 
         A few dozen chunks rebuild in seconds, which removes a whole class of
         incremental-sync deletion bugs. The collection is dropped and recreated rather
         than diffed.
+
+        Colloquial phrasings are derived here, from the policy text — they are index
+        metadata and never appear in the source documents.
         """
         chunks = load_chunks(policy_dir)
+        if with_variants:
+            self._attach_variants(chunks)
         client = self._client()
         try:
             if client.collections.exists(self.collection_name):

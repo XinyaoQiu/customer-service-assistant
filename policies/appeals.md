@@ -3,10 +3,6 @@ policy_id: POL-APP-004
 title: Appealing a review decision
 effective_from: 2026-07-01
 locales: [en, es]
-query_variants:
-  - "how do I appeal"
-  - "I think this rejection is wrong"
-  - "apelar decisión"
 ---
 
 ## Appeals > Eligibility

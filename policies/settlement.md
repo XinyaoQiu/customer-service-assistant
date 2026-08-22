@@ -3,12 +3,6 @@ policy_id: POL-PAY-001
 title: Payout timing
 effective_from: 2026-06-01
 locales: [en, es]
-query_variants:
-  - "where is my money"
-  - "when do I get paid"
-  - "payout is late"
-  - "cuándo me pagan"
-  - "no ha llegado el pago"
 ---
 
 ## Payout Timing > Standard cycle

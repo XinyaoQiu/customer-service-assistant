@@ -74,9 +74,20 @@ class TestChunking:
         assert "Payout Timing" in chunk.embed_text
         assert chunk.text in chunk.embed_text
 
-    def test_variants_ride_along_for_retrieval(self):
-        chunk = next(c for c in load_chunks(POLICY_DIR) if c.query_variants)
-        assert chunk.query_variants[0] in chunk.embed_text
+    def test_documents_carry_no_retrieval_metadata(self):
+        """A help-centre page has a title and a body, nothing about how people ask.
+
+        Colloquial phrasings are index metadata, generated during indexing. Writing
+        them into the documents made the corpus fit the evaluation set, which is how
+        retrieval scored 92% before anything was reranked.
+        """
+        for chunk in load_chunks(POLICY_DIR):
+            assert not chunk.query_variants, f"{chunk.source_file} carries variants"
+
+    def test_variants_reach_embed_text_once_attached(self):
+        chunks = load_chunks(POLICY_DIR)
+        chunks[0].query_variants = ["where is my money"]
+        assert "where is my money" in chunks[0].embed_text
 
     def test_every_policy_declares_an_effective_date(self):
         # Entries without one have neither date filtering nor decay protection.

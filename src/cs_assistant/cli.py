@@ -90,6 +90,84 @@ def chat(
             typer.secho(f"failed: {exc}", fg=typer.colors.RED)
 
 
+@app.command()
+def turns(limit: int = 20):
+    """Recent conversation turns."""
+    from .records import TurnRecorder
+    from .sources.business_db import BusinessDB
+
+    settings = Settings.from_env()
+    for row in TurnRecorder(BusinessDB(settings.mysql_dsn)).recent(limit):
+        flags = " escalated" if row["escalated"] else ""
+        verdict = f" [{row['verdict']}]" if row["verdict"] else ""
+        typer.echo(
+            f"#{row['id']:<4} {row['created_at']:%m-%d %H:%M}  {row['thread_id'][:20]:<22}"
+            f" t{row['turn']}  {(row['duration_ms'] or 0) / 1000:5.1f}s"
+            f"  {row['message']}{flags}{verdict}"
+        )
+
+
+@app.command()
+def replay(thread_id: str):
+    """Every turn of one conversation, for working out what went wrong."""
+    from .records import TurnRecorder
+    from .sources.business_db import BusinessDB
+
+    settings = Settings.from_env()
+    rows = TurnRecorder(BusinessDB(settings.mysql_dsn)).replay(thread_id)
+    if not rows:
+        typer.secho(f"no turns for {thread_id}", fg=typer.colors.YELLOW)
+        raise typer.Exit(1)
+
+    for row in rows:
+        typer.secho(f"\nturn {row['turn']}  ({(row['duration_ms'] or 0) / 1000:.1f}s)",
+                    fg=typer.colors.CYAN)
+        typer.echo(f"  publisher: {row['message']}")
+        typer.echo(f"  assistant: {(row['reply'] or '')[:400]}")
+        if row["escalated"]:
+            typer.secho(f"  escalated: {row['escalation_reason']} → {row['ticket_id']}",
+                        fg=typer.colors.YELLOW)
+
+
+@app.command()
+def verdict(turn_id: int, result: str, note: str = typer.Option(None)):
+    """Judge a past turn: correct | wrong | partial."""
+    from .records import TurnRecorder
+    from .sources.business_db import BusinessDB
+
+    if result not in ("correct", "wrong", "partial"):
+        typer.secho("verdict must be correct, wrong, or partial", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    settings = Settings.from_env()
+    if TurnRecorder(BusinessDB(settings.mysql_dsn)).set_verdict(turn_id, result, note):
+        typer.secho(f"turn {turn_id} marked {result}", fg=typer.colors.GREEN)
+
+
+@app.command()
+def stats(days: int = 30):
+    """Aggregates over recorded turns."""
+    from .records import TurnRecorder
+    from .sources.business_db import BusinessDB
+
+    settings = Settings.from_env()
+    data = TurnRecorder(BusinessDB(settings.mysql_dsn)).stats(days)
+    if not data or not data.get("turns"):
+        typer.echo("no turns recorded")
+        return
+
+    typer.secho(f"last {days} days", bold=True)
+    typer.echo(f"  turns:         {data['turns']} across {data['conversations']} conversations")
+    typer.echo(f"  escalated:     {data['escalated'] or 0}")
+    typer.echo(f"  avg latency:   {(data['avg_ms'] or 0) / 1000:.1f}s")
+    reviewed = int(data["reviewed"] or 0)
+    if reviewed:
+        typer.echo(f"  reviewed:      {reviewed}, {int(data['wrong'] or 0)} wrong")
+    else:
+        # Never fold unreviewed turns into a success rate.
+        typer.echo(f"  reviewed:      0 of {data['turns']} — accuracy unmeasured")
+
+
 def _render(turn) -> None:
     typer.secho(
         f"\n[{turn.intent or 'unrouted'}]"

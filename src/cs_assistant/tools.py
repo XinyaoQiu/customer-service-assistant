@@ -118,6 +118,14 @@ def search_policy(query: str, runtime: ToolRuntime) -> list[dict]:
     and cite the page so the publisher can read it themselves.
     """
     hits = _policy_index().search(query, locale=runtime.context.locale, limit=4)
+    if not hits:
+        return [{
+            "no_match": True,
+            "note": (
+                "The help centre has no published policy covering this. Say so rather "
+                "than answering from memory, and offer to connect them with someone."
+            ),
+        }]
     return [
         {
             "title": h["title"],

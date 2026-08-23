@@ -35,6 +35,11 @@ class Settings(BaseModel):
 
     # Retrieval casts wide, the reranker narrows. Hybrid fusion merges candidate lists
     # but cannot tell whether a passage answers the question.
+    # Below this, the corpus has nothing on the question. Measured on this corpus:
+    # covered questions score 0.72-0.99, uncovered ones score exactly 0.0. Returning
+    # weak matches anyway is how an assistant answers confidently from a passage that
+    # does not address the question.
+    rerank_floor: float = 0.1
     rerank_enabled: bool = True
     # Multilingual. An English-only reranker (ms-marco-MiniLM) scored 0/4 on Spanish
     # phrasings absent from query_variants, landing on unrelated documents every time —
@@ -50,6 +55,7 @@ class Settings(BaseModel):
     max_clarifications: int = 2
     # Turns of history the agent sees. Enough for "the second one" and follow-up
     # questions; bounded so a long session does not grow the prompt without limit.
+    record_turns: bool = True
     history_turns: int = 6
     agent_max_rounds: int = 4
     # Measured: retrieval ~0.8s and one model call ~0.9s, but a three-round agent

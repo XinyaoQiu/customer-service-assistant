@@ -257,3 +257,42 @@ class TestConversationHistory:
         history = self._history(turns=10, window=2)
         assert history[-1]["content"] == "a9"
         assert history[0]["content"] == "q8"
+
+
+class TestRetrievalFloor:
+    """Nothing relevant is a finding, not an empty page to fill.
+
+    Measured on this corpus: covered questions rerank at 0.72-0.99, uncovered ones at
+    exactly 0.0. Returning the least-bad passages anyway is how an assistant answers
+    confidently from a policy that does not address the question.
+    """
+
+    def _above_floor(self, scores: list[float], floor: float) -> list[float]:
+        return [s for s in scores if s >= floor]
+
+    def test_weak_matches_are_dropped(self):
+        assert self._above_floor([0.0, 0.0, 0.0], 0.1) == []
+
+    def test_strong_matches_survive(self):
+        assert self._above_floor([0.87, 0.75, 0.72], 0.1) == [0.87, 0.75, 0.72]
+
+    def test_floor_keeps_partial_relevance(self):
+        # A middling match is still worth showing; only the floor's own level is a
+        # judgment, and it sits an order of magnitude below the weakest real hit.
+        assert self._above_floor([0.87, 0.45, 0.0], 0.1) == [0.87, 0.45]
+
+
+@needs_stack
+class TestFloorAgainstCorpus:
+    @pytest.fixture(scope="class")
+    def index(self):
+        from cs_assistant.sources.policy import PolicyIndex
+
+        return PolicyIndex(Settings.from_env())
+
+    def test_uncovered_questions_return_nothing(self, index):
+        for query in ("how do I change my profile photo", "can I schedule posts in advance"):
+            assert index.search(query, limit=3) == [], query
+
+    def test_covered_questions_still_return(self, index):
+        assert index.search("how do I appeal a rejection", limit=3)

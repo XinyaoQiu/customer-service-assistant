@@ -219,7 +219,13 @@ class PolicyIndex:
         hits = self._hybrid(
             query, locale=locale, limit=candidates or self.settings.retrieval_candidates
         )
-        return self.reranker.rerank(query, hits, top_k=limit)
+        ranked = self.reranker.rerank(query, hits, top_k=limit)
+
+        # Nothing relevant is a finding, not an empty page to fill. Handing back the
+        # least-bad passages invites an answer built from a policy that does not cover
+        # the question.
+        floor = self.settings.rerank_floor
+        return [h for h in ranked if h.get("rerank_score", floor) >= floor]
 
     def _hybrid(self, query: str, *, locale: str, limit: int) -> list[dict]:
         # Embedding is a network call and opening the Weaviate connection is another;

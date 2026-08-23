@@ -5,6 +5,7 @@ interrupt handshake so a turn either returns a reply or reports that a human now
 the conversation.
 """
 
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
@@ -12,6 +13,8 @@ from langgraph.types import Command
 
 from .config import Settings
 from .graph import build_graph
+from .records import TurnRecorder
+from .sources.business_db import BusinessDB
 from .state import PublisherContext, initial_state
 
 
@@ -35,6 +38,12 @@ class Conversation:
         self.context = PublisherContext(publisher_id=publisher_id, locale=locale)
         self.thread_id = thread_id or f"{publisher_id}-session"
         self._started = False
+        self._turn = 0
+
+        self.recorder = TurnRecorder(
+            BusinessDB(self.settings.mysql_dsn), enabled=self.settings.record_turns
+        )
+        self.recorder.ensure_schema()
 
     @property
     def _config(self) -> dict:
@@ -49,6 +58,7 @@ class Conversation:
         )
         self._started = True
 
+        started = time.monotonic()
         result = self.graph.invoke(payload, config=self._config, context=self.context)
 
         # An escalation pauses at the interrupt so a human can take over. Nothing here
@@ -59,6 +69,7 @@ class Conversation:
                 Command(resume={"note": None}), config=self._config, context=self.context
             )
 
+        self._record(message, result, started)
         return Turn(
             reply=result.get("reply", ""),
             intent=result.get("intent", ""),
@@ -82,6 +93,7 @@ class Conversation:
         )
         self._started = True
 
+        started = time.monotonic()
         interrupted = False
         seen: set[str] = set()
 
@@ -122,7 +134,22 @@ class Conversation:
             state = self.graph.get_state(self._config)
 
         reply = (state.values.get("reply") if state else "") or ""
+        self._record(message, state.values if state else {}, started)
         yield "reply", reply
+
+    def _record(self, message: str, result: dict, started: float) -> None:
+        self._turn += 1
+        self.recorder.record(
+            thread_id=self.thread_id,
+            publisher_id=self.context.publisher_id,
+            turn=self._turn,
+            message=message,
+            reply=result.get("reply", ""),
+            escalated=bool(result.get("escalated")),
+            escalation_reason=result.get("escalation_reason"),
+            ticket_id=result.get("escalation_ticket"),
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
 
     def history(self) -> list[dict]:
         snapshot = self.graph.get_state(self._config)

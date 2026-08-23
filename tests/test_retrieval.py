@@ -225,3 +225,35 @@ class TestIdempotencyKey:
 
     def test_later_turns_get_their_own_key(self):
         assert self._key("t", 1, "r") != self._key("t", 2, "r")
+
+
+class TestConversationHistory:
+    """The agent must see the conversation, not only the newest line.
+
+    State accumulated history and the checkpointer persisted it, but the agent was
+    invoked with a single message — so "the second one" had nothing to resolve against
+    and the whole multi-turn mechanism was storing data nobody read.
+    """
+
+    def _history(self, turns: int, window: int) -> list[dict]:
+        messages = []
+        for i in range(turns):
+            messages.append({"role": "user", "content": f"q{i}"})
+            messages.append({"role": "assistant", "content": f"a{i}"})
+        return [
+            {"role": m["role"], "content": m["content"]}
+            for m in messages[-window * 2 :]
+            if m.get("content")
+        ]
+
+    def test_history_is_bounded(self):
+        # A long session must not grow the prompt without limit.
+        assert len(self._history(turns=50, window=6)) == 12
+
+    def test_short_conversations_are_kept_whole(self):
+        assert len(self._history(turns=2, window=6)) == 4
+
+    def test_window_keeps_the_most_recent_turns(self):
+        history = self._history(turns=10, window=2)
+        assert history[-1]["content"] == "a9"
+        assert history[0]["content"] == "q8"

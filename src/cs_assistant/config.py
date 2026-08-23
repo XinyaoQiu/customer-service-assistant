@@ -48,6 +48,9 @@ class Settings(BaseModel):
     # frustrating failure mode in support chat, so the cap is enforced rather than left
     # to the model's judgment.
     max_clarifications: int = 2
+    # Turns of history the agent sees. Enough for "the second one" and follow-up
+    # questions; bounded so a long session does not grow the prompt without limit.
+    history_turns: int = 6
     agent_max_rounds: int = 4
     # Measured: retrieval ~0.8s and one model call ~0.9s, but a three-round agent
     # measured at 37s end to end. The bound exists to stop runaway loops, not to force

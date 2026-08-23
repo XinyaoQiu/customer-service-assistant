@@ -144,6 +144,16 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
                 f"{listing}\nCall find_recent_articles again only if you need more.]"
             )
 
+        # The agent sees the conversation, not just the latest line. "Why was the second
+        # one rejected?" is unanswerable without the turn that listed them, and support
+        # conversations are made of exactly those references.
+        history = [
+            {"role": m["role"], "content": m["content"]}
+            for m in state.get("messages", [])[-settings.history_turns * 2 :]
+            if m.get("content")
+        ]
+        conversation = history[:-1] + [{"role": "user", "content": prompt}]
+
         # Whatever the agent establishes lands here as it goes, so a timeout can hand
         # back partial work instead of discarding it. A publisher who gets half an
         # answer plus a handoff is better off than one who gets only the handoff.
@@ -151,7 +161,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
 
         def run():
             result = agent.invoke(
-                {"messages": [{"role": "user", "content": prompt}]},
+                {"messages": conversation},
                 config={"recursion_limit": settings.agent_max_rounds * 2},
                 context=runtime.context,
             )

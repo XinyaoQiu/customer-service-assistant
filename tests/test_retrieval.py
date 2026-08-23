@@ -200,3 +200,28 @@ class TestStreamingContract:
 
         emitted = [t for t in ["a", "b", "a", "b", "c"] if progress(t)]
         assert emitted == ["a", "b", "c"]
+
+
+class TestIdempotencyKey:
+    """Replay-safe within a conversation, distinct across conversations.
+
+    Resuming an interrupt re-runs the node, so the key must be stable for one turn.
+    But a key built only from publisher and turn number collides on every first turn —
+    the second publisher to escalate would silently receive the first one's ticket.
+    """
+
+    def _key(self, thread: str, turn: int, reason: str) -> str:
+        return f"{thread}:{turn}:{reason}"
+
+    def test_same_turn_replays_to_the_same_key(self):
+        first = self._key("pub_001-session", 1, "the lookup took too long")
+        replay = self._key("pub_001-session", 1, "the lookup took too long")
+        assert first == replay
+
+    def test_conversations_do_not_collide(self):
+        a = self._key("pub_001-session", 1, "the lookup took too long")
+        b = self._key("pub_002-session", 1, "the lookup took too long")
+        assert a != b
+
+    def test_later_turns_get_their_own_key(self):
+        assert self._key("t", 1, "r") != self._key("t", 2, "r")

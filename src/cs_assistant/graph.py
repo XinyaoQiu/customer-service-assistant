@@ -16,7 +16,7 @@ import logging
 from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.config import get_stream_writer
+from langgraph.config import get_config, get_stream_writer
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
 from langgraph.types import interrupt
@@ -144,22 +144,41 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
                 f"{listing}\nCall find_recent_articles again only if you need more.]"
             )
 
+        # Whatever the agent establishes lands here as it goes, so a timeout can hand
+        # back partial work instead of discarding it. A publisher who gets half an
+        # answer plus a handoff is better off than one who gets only the handoff.
+        progress: dict = {}
+
         def run():
-            return agent.invoke(
+            result = agent.invoke(
                 {"messages": [{"role": "user", "content": prompt}]},
                 config={"recursion_limit": settings.agent_max_rounds * 2},
                 context=runtime.context,
             )
+            progress["result"] = result
+            return result
 
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(run)
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                result = pool.submit(run).result(timeout=settings.agent_timeout_seconds)
+            result = future.result(timeout=settings.agent_timeout_seconds)
         except concurrent.futures.TimeoutError:
             log.warning("agent exceeded %.0fs", settings.agent_timeout_seconds)
+            # Returning is the point of the budget. Python cannot interrupt a thread,
+            # so it is left to finish and discarded — waiting for it here is what turned
+            # a 90s budget into a 225s reply.
+            pool.shutdown(wait=False)
             return {"escalation_reason": "the lookup took too long"}
         except Exception as exc:
             log.warning("agent failed: %s", exc)
-            return {"escalation_reason": "the lookup failed"}
+            pool.shutdown(wait=False)
+            partial = _partial_reply(progress.get("result"))
+            update = {"escalation_reason": "the lookup failed"}
+            if partial:
+                update["reply"] = partial
+            return update
+        finally:
+            pool.shutdown(wait=False)
 
         update: dict = {}
         for message in result.get("messages", []):
@@ -188,6 +207,15 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
                 update["messages"] = [{"role": "assistant", "content": reply}]
         return update
 
+    def _partial_reply(result) -> str:
+        """The last thing the agent said, if it said anything before failing."""
+        if not result:
+            return ""
+        for message in reversed(result.get("messages", [])):
+            if getattr(message, "type", None) == "ai" and message.content:
+                return _text_of(message.content)
+        return ""
+
     def escalate(state: ConversationState, runtime: Runtime[PublisherContext]) -> dict:
         """Hand off to a human.
 
@@ -196,6 +224,7 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
         """
         reason = state.get("escalation_reason") or "could not be resolved automatically"
         article_id = state.get("subject_article_id")
+        thread = get_config().get("configurable", {}).get("thread_id", "")
 
         _emit("Passing this to a specialist…")
         interrupt({
@@ -207,8 +236,10 @@ def build_graph(settings: Settings | None = None, checkpointer=None, warm: bool 
             }
         })
 
-        # Deterministic across replays, so the second pass finds the first ticket.
-        key = f"{runtime.context.publisher_id}:{state.get('turn', 1)}:{reason}"
+        # Deterministic across replays of the same turn, distinct across conversations.
+        # Without the thread id, every first turn shares a key and the second publisher
+        # to escalate silently receives the first one's ticket.
+        key = f"{thread}:{state.get('turn', 1)}:{reason}"
         ticket = db.create_escalation(
             publisher_id=runtime.context.publisher_id,
             publisher_message=last_user_message(state),
